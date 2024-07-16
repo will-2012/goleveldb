@@ -111,26 +111,26 @@ func (v *version) walkOverlapping(aux tFiles, ikey internalKey, f func(level int
 			continue
 		}
 
-		if level == 0 {
-			// Level-0 files may overlap each other. Find all files that
-			// overlap ukey.
-			for _, t := range tables {
-				if t.overlaps(v.s.icmp, ukey, ukey) {
-					if !f(level, t) {
-						return
-					}
-				}
-			}
-		} else {
-			if i := tables.searchMax(v.s.icmp, ikey); i < len(tables) {
-				t := tables[i]
-				if v.s.icmp.uCompare(ukey, t.imin.ukey()) >= 0 {
-					if !f(level, t) {
-						return
-					}
+		//if level == 0 {
+		//	// Level-0 files may overlap each other. Find all files that
+		//	// overlap ukey.
+		//	for _, t := range tables {
+		//		if t.overlaps(v.s.icmp, ukey, ukey) {
+		//			if !f(level, t) {
+		//				return
+		//			}
+		//		}
+		//	}
+		//} else {
+		if i := tables.searchMax(v.s.icmp, ikey); i < len(tables) {
+			t := tables[i]
+			if v.s.icmp.uCompare(ukey, t.imin.ukey()) >= 0 {
+				if !f(level, t) {
+					return
 				}
 			}
 		}
+		//}
 
 		if lf != nil && !lf(level) {
 			return
