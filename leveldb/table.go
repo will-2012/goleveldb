@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"sync/atomic"
+	"time"
 
 	"github.com/syndtr/goleveldb/leveldb/cache"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
@@ -432,7 +433,10 @@ func (t *tOps) open(f *tFile) (ch *cache.Handle, err error) {
 // Finds key/value pair whose key is greater than or equal to the
 // given key.
 func (t *tOps) find(f *tFile, key []byte, ro *opt.ReadOptions) (rkey, rvalue []byte, err error) {
+	step3Start := time.Now()
 	ch, err := t.open(f)
+	t.s.logf("open sst cost %s", PrettyDuration(time.Now().Sub(step3Start)))
+
 	if err != nil {
 		return nil, nil, err
 	}
