@@ -8,6 +8,8 @@ package leveldb
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -88,6 +90,10 @@ func (v *version) release() {
 }
 
 func (v *version) walkOverlapping(aux tFiles, ikey internalKey, f func(level int, t *tFile) bool, lf func(level int) bool) {
+	step1Start := time.Now()
+	defer func() {
+		v.s.logf("walk overlapping cost %s", PrettyDuration(time.Now().Sub(step1Start)))
+	}()
 	ukey := ikey.ukey()
 
 	// Aux level.
@@ -138,6 +144,22 @@ func (v *version) walkOverlapping(aux tFiles, ikey internalKey, f func(level int
 	}
 }
 
+// PrettyDuration is a pretty printed version of a time.Duration value that cuts
+// the unnecessary precision off from the formatted textual representation.
+type PrettyDuration time.Duration
+
+var prettyDurationRe = regexp.MustCompile(`\.[0-9]{4,}`)
+
+// String implements the Stringer interface, allowing pretty printing of duration
+// values rounded to three decimals.
+func (d PrettyDuration) String() string {
+	label := time.Duration(d).String()
+	if match := prettyDurationRe.FindString(label); len(match) > 4 {
+		label = strings.Replace(label, match, match[:4], 1)
+	}
+	return label
+}
+
 func (v *version) get(aux tFiles, ikey internalKey, ro *opt.ReadOptions, noValue bool) (value []byte, tcomp bool, err error) {
 	if v.closing {
 		return nil, false, ErrClosed
@@ -177,7 +199,10 @@ func (v *version) get(aux tFiles, ikey internalKey, ro *opt.ReadOptions, noValue
 		if noValue {
 			fikey, ferr = v.s.tops.findKey(t, ikey, ro)
 		} else {
+			step2Start := time.Now()
 			fikey, fval, ferr = v.s.tops.find(t, ikey, ro)
+			v.s.logf("sst read cost %s", PrettyDuration(time.Now().Sub(step2Start)))
+
 		}
 
 		switch ferr {
