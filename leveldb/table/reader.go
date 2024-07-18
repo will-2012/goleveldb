@@ -10,9 +10,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/golang/snappy"
 
@@ -817,16 +819,55 @@ func (r *Reader) NewIterator(slice *util.Range, ro *opt.ReadOptions) iterator.It
 	return iterator.NewIndexedIterator(index, opt.GetStrict(r.o, ro, opt.StrictReader))
 }
 
+// PrettyDuration is a pretty printed version of a time.Duration value that cuts
+// the unnecessary precision off from the formatted textual representation.
+type PrettyDuration time.Duration
+
+var prettyDurationRe = regexp.MustCompile(`\.[0-9]{4,}`)
+
+// String implements the Stringer interface, allowing pretty printing of duration
+// values rounded to three decimals.
+func (d PrettyDuration) String() string {
+	label := time.Duration(d).String()
+	if match := prettyDurationRe.FindString(label); len(match) > 4 {
+		label = strings.Replace(label, match, match[:4], 1)
+	}
+	return label
+}
+
 func (r *Reader) find(key []byte, filtered bool, ro *opt.ReadOptions, noValue bool) (rkey, value []byte, err error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	var (
+		step1Start time.Time
+		step1End   time.Time
+		step2Start time.Time
+		step2End   time.Time
+		step3Start time.Time
+		step3End   time.Time
+		step4Start time.Time
+		step4End   time.Time
+	)
+
+	defer func() {
+		fmt.Printf("Perf sst find, get_index_block=%s, seek_index=%s, check_filter=%s, seek_data=%s, total_cost=%s\n",
+			PrettyDuration(step1End.Sub(step1Start)),
+			PrettyDuration(step2End.Sub(step2Start)),
+			PrettyDuration(step3End.Sub(step3Start)),
+			PrettyDuration(step4End.Sub(step4Start)),
+			PrettyDuration(time.Now().Sub(step1Start)))
+	}()
 
 	if r.err != nil {
 		err = r.err
 		return
 	}
-
+	step1Start = time.Now()
 	indexBlock, rel, err := r.getIndexBlock(true)
+	step1End = time.Now()
+
+	step2Start = time.Now()
 	if err != nil {
 		return
 	}
@@ -847,7 +888,9 @@ func (r *Reader) find(key []byte, filtered bool, ro *opt.ReadOptions, noValue bo
 		r.err = r.newErrCorruptedBH(r.indexBH, "bad data block handle")
 		return nil, nil, r.err
 	}
+	step2End = time.Now()
 
+	step3Start = time.Now()
 	// The filter should only used for exact match.
 	if filtered && r.filter != nil {
 		filterBlock, frel, ferr := r.getFilterBlock(true)
@@ -861,7 +904,9 @@ func (r *Reader) find(key []byte, filtered bool, ro *opt.ReadOptions, noValue bo
 			return nil, nil, ferr
 		}
 	}
+	step3End = time.Now()
 
+	step4Start = time.Now()
 	data := r.getDataIter(dataBH, nil, r.verifyChecksum, !ro.GetDontFillCache())
 	if !data.Seek(key) {
 		data.Release()
@@ -905,6 +950,7 @@ func (r *Reader) find(key []byte, filtered bool, ro *opt.ReadOptions, noValue bo
 		}
 	}
 	data.Release()
+	step4End = time.Now()
 	return
 }
 

@@ -8,6 +8,8 @@ package leveldb
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -88,6 +90,10 @@ func (v *version) release() {
 }
 
 func (v *version) walkOverlapping(aux tFiles, ikey internalKey, f func(level int, t *tFile) bool, lf func(level int) bool) {
+	step1Start := time.Now()
+	defer func() {
+		v.s.logf("walk overlapping cost %s", PrettyDuration(time.Now().Sub(step1Start)))
+	}()
 	ukey := ikey.ukey()
 
 	// Aux level.
@@ -111,31 +117,47 @@ func (v *version) walkOverlapping(aux tFiles, ikey internalKey, f func(level int
 			continue
 		}
 
-		if level == 0 {
-			// Level-0 files may overlap each other. Find all files that
-			// overlap ukey.
-			for _, t := range tables {
-				if t.overlaps(v.s.icmp, ukey, ukey) {
-					if !f(level, t) {
-						return
-					}
-				}
-			}
-		} else {
-			if i := tables.searchMax(v.s.icmp, ikey); i < len(tables) {
-				t := tables[i]
-				if v.s.icmp.uCompare(ukey, t.imin.ukey()) >= 0 {
-					if !f(level, t) {
-						return
-					}
+		//if level == 0 {
+		//	// Level-0 files may overlap each other. Find all files that
+		//	// overlap ukey.
+		//	for _, t := range tables {
+		//		if t.overlaps(v.s.icmp, ukey, ukey) {
+		//			if !f(level, t) {
+		//				return
+		//			}
+		//		}
+		//	}
+		//} else {
+		if i := tables.searchMax(v.s.icmp, ikey); i < len(tables) {
+			t := tables[i]
+			if v.s.icmp.uCompare(ukey, t.imin.ukey()) >= 0 {
+				if !f(level, t) {
+					return
 				}
 			}
 		}
+		//}
 
 		if lf != nil && !lf(level) {
 			return
 		}
 	}
+}
+
+// PrettyDuration is a pretty printed version of a time.Duration value that cuts
+// the unnecessary precision off from the formatted textual representation.
+type PrettyDuration time.Duration
+
+var prettyDurationRe = regexp.MustCompile(`\.[0-9]{4,}`)
+
+// String implements the Stringer interface, allowing pretty printing of duration
+// values rounded to three decimals.
+func (d PrettyDuration) String() string {
+	label := time.Duration(d).String()
+	if match := prettyDurationRe.FindString(label); len(match) > 4 {
+		label = strings.Replace(label, match, match[:4], 1)
+	}
+	return label
 }
 
 func (v *version) get(aux tFiles, ikey internalKey, ro *opt.ReadOptions, noValue bool) (value []byte, tcomp bool, err error) {
@@ -177,7 +199,10 @@ func (v *version) get(aux tFiles, ikey internalKey, ro *opt.ReadOptions, noValue
 		if noValue {
 			fikey, ferr = v.s.tops.findKey(t, ikey, ro)
 		} else {
+			step2Start := time.Now()
 			fikey, fval, ferr = v.s.tops.find(t, ikey, ro)
+			v.s.logf("sst read cost %s", PrettyDuration(time.Now().Sub(step2Start)))
+
 		}
 
 		switch ferr {
@@ -259,15 +284,15 @@ func (v *version) sampleSeek(ikey internalKey) (tcomp bool) {
 
 func (v *version) getIterators(slice *util.Range, ro *opt.ReadOptions) (its []iterator.Iterator) {
 	strict := opt.GetStrict(v.s.o.Options, ro, opt.StrictReader)
-	for level, tables := range v.levels {
-		if level == 0 {
-			// Merge all level zero files together since they may overlap.
-			for _, t := range tables {
-				its = append(its, v.s.tops.newIterator(t, slice, ro))
-			}
-		} else if len(tables) != 0 {
-			its = append(its, iterator.NewIndexedIterator(tables.newIndexIterator(v.s.tops, v.s.icmp, slice, ro), strict))
-		}
+	for _, tables := range v.levels {
+		//if level == 0 {
+		//	// Merge all level zero files together since they may overlap.
+		//	for _, t := range tables {
+		//		its = append(its, v.s.tops.newIterator(t, slice, ro))
+		//	}
+		//} else if len(tables) != 0 {
+		its = append(its, iterator.NewIndexedIterator(tables.newIndexIterator(v.s.tops, v.s.icmp, slice, ro), strict))
+		//}
 	}
 	return
 }
@@ -511,16 +536,16 @@ func (p *versionStaging) finish(trivial bool) *version {
 				for _, r := range scratch.added {
 					added = append(added, tableFileFromRecord(r))
 				}
-				if level == 0 {
-					added.sortByNum()
-					index := nt.searchNumLess(added[len(added)-1].fd.Num)
-					nt = append(nt[:index], append(added, nt[index:]...)...)
-				} else {
-					added.sortByKey(p.base.s.icmp)
-					_, amax := added.getRange(p.base.s.icmp)
-					index := nt.searchMin(p.base.s.icmp, amax)
-					nt = append(nt[:index], append(added, nt[index:]...)...)
-				}
+				//if level == 0 {
+				//	added.sortByNum()
+				//	index := nt.searchNumLess(added[len(added)-1].fd.Num)
+				//	nt = append(nt[:index], append(added, nt[index:]...)...)
+				//} else {
+				added.sortByKey(p.base.s.icmp)
+				_, amax := added.getRange(p.base.s.icmp)
+				index := nt.searchMin(p.base.s.icmp, amax)
+				nt = append(nt[:index], append(added, nt[index:]...)...)
+				//}
 				nv.levels[level] = nt
 				continue
 			}
@@ -532,11 +557,11 @@ func (p *versionStaging) finish(trivial bool) *version {
 
 			if len(nt) != 0 {
 				// Sort tables.
-				if level == 0 {
-					nt.sortByNum()
-				} else {
-					nt.sortByKey(p.base.s.icmp)
-				}
+				//if level == 0 {
+				//	nt.sortByNum()
+				//} else {
+				nt.sortByKey(p.base.s.icmp)
+				//}
 
 				nv.levels[level] = nt
 			}
